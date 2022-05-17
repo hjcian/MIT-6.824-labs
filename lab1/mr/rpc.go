@@ -11,28 +11,44 @@ import (
 	"strconv"
 )
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
 // Add your RPC definitions here.
-
-type MapTaskRequest struct{}
-
-type MapTaskReply struct {
-	TaskNum  int
-	Filename string
-	NReduce  int
+type AskMapTaskRequest struct {
+	WorkerID int // just using PID
 }
+
+type AskMapTaskReply struct {
+	TaskID   int
+	Filename string // for reading file
+	NReduce  int    // for spliting the task results to NReduce pieces
+}
+
+type CompleteMapTaskRequest struct {
+	WorkerID  int // just using PID
+	TaskID    string
+	Filenames []string // the results, intermediate file names
+}
+
+type CompleteMapTaskReply struct{}
+
+//
+// reduce
+//
+type AskReduceTaskRequest struct {
+	WorkerID int // just using PID
+}
+
+type AskReduceTaskReply struct {
+	TaskID    int
+	Filenames []string // the intermediate file names for reading
+}
+
+type CompleteReduceTaskRequest struct {
+	WorkerID int // just using PID
+	TaskID   string
+	Filename string // result file
+}
+
+type CompleteReduceTaskReply struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.

@@ -11,6 +11,14 @@ import (
 	"sync"
 )
 
+type taskState int
+
+const (
+	unfinished taskState = iota
+	processing
+	finished
+)
+
 type Master struct {
 	// Your definitions here.
 	mu          sync.Mutex
@@ -19,7 +27,7 @@ type Master struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
-func (m *Master) GetMapTask(_ *MapTaskRequest, reply *MapTaskReply) error {
+func (m *Master) AskMapTask(req *AskMapTaskRequest, reply *AskMapTaskReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.mapTasks) == 0 {
@@ -27,16 +35,6 @@ func (m *Master) GetMapTask(_ *MapTaskRequest, reply *MapTaskReply) error {
 	}
 
 	reply.Filename = m.mapTasks[0]
-	return nil
-}
-
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
 	return nil
 }
 
@@ -80,6 +78,11 @@ func MakeMaster(files []string, nReduce int) *Master {
 		mapTasks:    files,
 		reduceTasks: make([]string, 0),
 	}
+
+	// create initial map tasks
+	// wait:
+	// 	1. worker to ask map task
+	//  2. worker to commit the map task done information and each map task results (should have <nReduce> intermediate files)
 
 	// Your code here.
 

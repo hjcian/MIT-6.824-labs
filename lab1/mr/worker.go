@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 //
@@ -46,54 +47,58 @@ func readWords(filename string, mapf func(string, string) []KeyValue) []KeyValue
 //
 func Worker(
 	mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-	reply, ok := getMapTask()
-	if !ok {
-		return
+	reducef func(string, []string) string,
+) {
+	// require map task loop
+	printf("Start worker")
+	printf("start ask map task...")
+	for {
+		task, ok := askMapTask()
+		if !ok {
+			// no task possibly available, go to reduce phase
+			break
+		}
+		if task.TaskID < 0 {
+			// means there is map task, just wait
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		// kva := readWords(reply.Filename, mapf)
+		// do map
+		// save intermediate files
+		// send reply to master
 	}
 
-	kva := readWords(reply.Filename, mapf)
-	// for _, kv := range kva {
-	// 	reduceNum := ihash(kv.Key) % reply.NReduce
-	// }
-	fmt.Println(kva)
-	// ask task
-	// do Map -> intermediate k/v
-	// write k/v to JSON file
-
-	// reply result
+	printf("start ask reduce task...")
+	// require reduce task loop
+	for {
+		task, ok := askReduceTask()
+		if !ok {
+			// no task possibly available, exit worker
+			break
+		}
+		if task.TaskID < 0 {
+			// means there is map task, just wait
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		fmt.Println(task)
+		// do reduce
+		// save result file
+		// send reply to master
+	}
+	printf("End worker")
 }
 
-func getMapTask() (*MapTaskReply, bool) {
-	reply := MapTaskReply{}
-	ret := call("Master.GetMapTask", &MapTaskRequest{}, &reply)
-	return &reply, ret
+func askMapTask() (*AskMapTaskReply, bool) {
+	reply := &AskMapTaskReply{}
+	ret := call("Master.AskMapTask", &AskMapTaskRequest{os.Getpid()}, reply)
+	return reply, ret
 }
 
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-// func CallExample() {
-
-// 	// declare an argument structure.
-// 	args := ExampleArgs{}
-
-// 	// fill in the argument(s).
-// 	args.X = 99
-
-// 	// declare a reply structure.
-// 	reply := ExampleReply{}
-
-// 	// send the RPC request, wait for the reply.
-// 	call("Master.Example", &args, &reply)
-
-// 	// reply.Y should be 100.
-// 	fmt.Printf("reply.Y %v\n", reply.Y)
-// }
+func askReduceTask() (*AskReduceTaskReply, bool) {
+	return nil, false
+}
 
 //
 // send an RPC request to the master, wait for the response.
@@ -116,4 +121,10 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+// printf adds pid in the begining and new line in the end.
+func printf(foramt string, args ...interface{}) {
+	prefix := fmt.Sprintf("[%v] ", os.Getpid())
+	log.Printf(prefix+foramt+"\n", args...)
 }
