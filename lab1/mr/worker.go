@@ -55,14 +55,23 @@ func Worker(
 	for {
 		task, ok := askMapTask()
 		if !ok {
-			// no task possibly available, go to reduce phase
-			break
+			// something went wrong
+			return
 		}
-		if task.TaskID < 0 {
-			// means there is map task, just wait
+
+		switch task.Action {
+		case WaitForCurrentPhaseDone:
+			// means there is map task still processing, just wait
 			time.Sleep(1 * time.Second)
 			continue
+		case PhaseDone:
+			// go to next phase
+			break
 		}
+		fmt.Println("Do task:", task.MapTaskInfo.Filename)
+		time.Sleep(1 * time.Second)
+
+		// DoTask
 		// kva := readWords(reply.Filename, mapf)
 		// do map
 		// save intermediate files
@@ -72,20 +81,23 @@ func Worker(
 	printf("start ask reduce task...")
 	// require reduce task loop
 	for {
-		task, ok := askReduceTask()
+		task, ok := askMapTask()
 		if !ok {
-			// no task possibly available, exit worker
-			break
+			// something went wrong
+			return
 		}
-		if task.TaskID < 0 {
-			// means there is map task, just wait
+
+		switch task.Action {
+		case WaitForCurrentPhaseDone:
+			// means there is map task still processing, just wait
 			time.Sleep(1 * time.Second)
 			continue
+		case PhaseDone:
+			// go to next phase
+			break
 		}
-		fmt.Println(task)
-		// do reduce
-		// save result file
-		// send reply to master
+
+		// DoTask
 	}
 	printf("End worker")
 }

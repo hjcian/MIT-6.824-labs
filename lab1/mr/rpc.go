@@ -11,15 +11,28 @@ import (
 	"strconv"
 )
 
+type Action int
+
+const (
+	DoTask Action = iota
+	WaitForCurrentPhaseDone
+	PhaseDone
+)
+
 // Add your RPC definitions here.
+
+type MapTaskInfo struct {
+	Filename string // for reading file
+	NReduce  int    // for spliting the task results to NReduce pieces
+}
+
 type AskMapTaskRequest struct {
 	WorkerID int // just using PID
 }
 
 type AskMapTaskReply struct {
-	TaskID   int
-	Filename string // for reading file
-	NReduce  int    // for spliting the task results to NReduce pieces
+	MapTaskInfo MapTaskInfo
+	Action      Action
 }
 
 type CompleteMapTaskRequest struct {

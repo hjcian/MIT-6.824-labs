@@ -1,40 +1,70 @@
 package mr
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
-	"sync"
+	"time"
 )
 
-type taskState int
+const _defaultExpire = 10 * time.Second
 
-const (
-	unfinished taskState = iota
-	processing
-	finished
-)
+type MapTask struct {
+	filename            string
+	mapTaskWaitingQueue chan *MapTask
+	mapTaskDoneQueue    chan *MapTask
+}
+
+func (mt *MapTask) startExpireCount(taskDoneInformer context.Context) {
+	go func() {
+		timer := time.NewTimer(_defaultExpire)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+			// timer expired, send task back to waiting queue
+			mt.mapTaskWaitingQueue <- mt
+			return
+		case <-taskDoneInformer.Done():
+			mt.mapTaskDoneQueue <- mt
+			return
+		}
+	}()
+}
 
 type Master struct {
-	// Your definitions here.
-	mu          sync.Mutex
-	mapTasks    []string
-	reduceTasks []string
+	nReduce             int
+	mapTaskNum          int
+	mapTaskWaitingQueue chan *MapTask
+	mapTaskDoneQueue    chan *MapTask
+	mapTaskFinisher     map[string]context.CancelFunc
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (m *Master) AskMapTask(req *AskMapTaskRequest, reply *AskMapTaskReply) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.mapTasks) == 0 {
-		return errors.New("no job")
+	if len(m.mapTaskDoneQueue) == m.mapTaskNum {
+		reply.Action = PhaseDone
+		fmt.Println("PhaseDone")
+		return nil
 	}
 
-	reply.Filename = m.mapTasks[0]
+	mTask, ok := <-m.mapTaskWaitingQueue
+	if !ok {
+		reply.Action = WaitForCurrentPhaseDone
+		fmt.Println("WaitForCurrentPhaseDone")
+		return nil
+	}
+	reply.Action = DoTask
+	reply.MapTaskInfo.Filename = mTask.filename
+	reply.MapTaskInfo.NReduce = m.nReduce
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mapTaskFinisher[reply.MapTaskInfo.Filename] = cancel
+	mTask.startExpireCount(ctx)
+	fmt.Println(reply)
 	return nil
 }
 
@@ -75,8 +105,18 @@ func MakeMaster(files []string, nReduce int) *Master {
 	fmt.Println("Start master")
 	fmt.Println(files)
 	m := Master{
-		mapTasks:    files,
-		reduceTasks: make([]string, 0),
+		nReduce:             nReduce,
+		mapTaskNum:          len(files),
+		mapTaskWaitingQueue: make(chan *MapTask, len(files)),
+		mapTaskDoneQueue:    make(chan *MapTask, len(files)),
+		mapTaskFinisher:     make(map[string]context.CancelFunc),
+	}
+	for _, filename := range files {
+		m.mapTaskWaitingQueue <- &MapTask{
+			filename:            filename,
+			mapTaskWaitingQueue: m.mapTaskWaitingQueue,
+			mapTaskDoneQueue:    m.mapTaskDoneQueue,
+		}
 	}
 
 	// create initial map tasks

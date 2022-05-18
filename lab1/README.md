@@ -19,3 +19,7 @@
 - 運行 master
 - 運行多個 workers (e.g. 3 workers)
 
+## 其他同學的答案參考
+- https://mr-dai.github.io/mit-6824-lab1/
+- https://zhuanlan.zhihu.com/p/260752052
+- https://mr-dai.github.io/mapreduce_summary/
