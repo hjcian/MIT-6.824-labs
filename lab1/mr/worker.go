@@ -52,6 +52,8 @@ func Worker(
 	// require map task loop
 	printf("Start worker")
 	printf("start ask map task...")
+
+MAP_PHASE:
 	for {
 		task, ok := askMapTask()
 		if !ok {
@@ -66,19 +68,26 @@ func Worker(
 			continue
 		case PhaseDone:
 			// go to next phase
-			break
+			printf("Go to reduce phase")
+			break MAP_PHASE // need this label the break the for loop, or you just break the switch case
 		}
-		fmt.Println("Do task:", task.MapTaskInfo.Filename)
-		time.Sleep(1 * time.Second)
+		printf("Do task: %s", task.MapTaskInfo.Filename)
+		// time.Sleep(1 * time.Second)
 
 		// DoTask
 		// kva := readWords(reply.Filename, mapf)
 		// do map
 		// save intermediate files
+		results := make([]string, 0)
+		for i := 0; i < task.MapTaskInfo.NReduce; i++ {
+			results = append(results, fmt.Sprintf("%s-%v-%v", task.MapTaskInfo.Filename, task.MapTaskInfo.ID, i))
+		}
+		completeMapTask(task.MapTaskInfo.ID, results)
 		// send reply to master
 	}
-
-	printf("start ask reduce task...")
+	printf("End worker")
+	return
+	// printf("start ask reduce task...")
 	// require reduce task loop
 	for {
 		task, ok := askMapTask()
@@ -108,6 +117,15 @@ func askMapTask() (*AskMapTaskReply, bool) {
 	return reply, ret
 }
 
+func completeMapTask(taskID int, results []string) {
+	req := &CompleteMapTaskRequest{
+		WorkerID:  os.Getpid(),
+		TaskID:    taskID,
+		Filenames: results,
+	}
+	call("Master.CompleteMapTask", req, &CompleteMapTaskReply{})
+}
+
 func askReduceTask() (*AskReduceTaskReply, bool) {
 	return nil, false
 }
@@ -131,7 +149,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	log.Println("[got master error]", err)
 	return false
 }
 

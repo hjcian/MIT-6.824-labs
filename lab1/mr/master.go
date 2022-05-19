@@ -2,18 +2,21 @@ package mr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 	"time"
 )
 
 const _defaultExpire = 10 * time.Second
 
 type MapTask struct {
+	id                  int
 	filename            string
 	mapTaskWaitingQueue chan *MapTask
 	mapTaskDoneQueue    chan *MapTask
@@ -41,30 +44,55 @@ type Master struct {
 	mapTaskNum          int
 	mapTaskWaitingQueue chan *MapTask
 	mapTaskDoneQueue    chan *MapTask
-	mapTaskFinisher     map[string]context.CancelFunc
+
+	mutex                   sync.Mutex
+	mapTaskProcessingBucket map[int]context.CancelFunc
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (m *Master) AskMapTask(req *AskMapTaskRequest, reply *AskMapTaskReply) error {
 	if len(m.mapTaskDoneQueue) == m.mapTaskNum {
 		reply.Action = PhaseDone
-		fmt.Println("PhaseDone")
+		log.Println("PhaseDone")
 		return nil
 	}
 
 	mTask, ok := <-m.mapTaskWaitingQueue
 	if !ok {
 		reply.Action = WaitForCurrentPhaseDone
-		fmt.Println("WaitForCurrentPhaseDone")
+		log.Println("WaitForCurrentPhaseDone")
 		return nil
 	}
 	reply.Action = DoTask
+	reply.MapTaskInfo.ID = mTask.id
 	reply.MapTaskInfo.Filename = mTask.filename
 	reply.MapTaskInfo.NReduce = m.nReduce
 	ctx, cancel := context.WithCancel(context.Background())
-	m.mapTaskFinisher[reply.MapTaskInfo.Filename] = cancel
+
+	m.mutex.Lock()
+	m.mapTaskProcessingBucket[mTask.id] = cancel
 	mTask.startExpireCount(ctx)
-	fmt.Println(reply)
+	m.mutex.Unlock()
+	return nil
+}
+
+func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, reply *CompleteMapTaskReply) error {
+	if len(req.Filenames) != m.nReduce {
+		return errors.New("are you kidding me? why your results not match nReduce?")
+	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	done, ok := m.mapTaskProcessingBucket[req.TaskID]
+	if !ok {
+		return errors.New("task not found")
+	}
+	done() // call cancel, means job done
+	log.Println("[job done]", req.TaskID, len(m.mapTaskDoneQueue), req.Filenames)
+
+	delete(m.mapTaskProcessingBucket, req.TaskID)
+	// TODO: store reduce tasks information
 	return nil
 }
 
@@ -104,15 +132,19 @@ func (m *Master) Done() bool {
 func MakeMaster(files []string, nReduce int) *Master {
 	fmt.Println("Start master")
 	fmt.Println(files)
+
+	taskNum := len(files)
 	m := Master{
-		nReduce:             nReduce,
-		mapTaskNum:          len(files),
-		mapTaskWaitingQueue: make(chan *MapTask, len(files)),
-		mapTaskDoneQueue:    make(chan *MapTask, len(files)),
-		mapTaskFinisher:     make(map[string]context.CancelFunc),
+		nReduce:                 nReduce,
+		mapTaskNum:              taskNum,
+		mapTaskWaitingQueue:     make(chan *MapTask, taskNum),
+		mapTaskDoneQueue:        make(chan *MapTask, taskNum),
+		mapTaskProcessingBucket: make(map[int]context.CancelFunc),
 	}
-	for _, filename := range files {
+
+	for idx, filename := range files {
 		m.mapTaskWaitingQueue <- &MapTask{
+			id:                  idx,
 			filename:            filename,
 			mapTaskWaitingQueue: m.mapTaskWaitingQueue,
 			mapTaskDoneQueue:    m.mapTaskDoneQueue,

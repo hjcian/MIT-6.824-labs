@@ -22,6 +22,7 @@ const (
 // Add your RPC definitions here.
 
 type MapTaskInfo struct {
+	ID       int
 	Filename string // for reading file
 	NReduce  int    // for spliting the task results to NReduce pieces
 }
@@ -36,9 +37,13 @@ type AskMapTaskReply struct {
 }
 
 type CompleteMapTaskRequest struct {
-	WorkerID  int // just using PID
-	TaskID    string
-	Filenames []string // the results, intermediate file names
+	WorkerID int // just using PID
+	TaskID   int
+	//
+	// the results, intermediate file names
+	// should order by reduce task number
+	//
+	Filenames []string
 }
 
 type CompleteMapTaskReply struct{}
