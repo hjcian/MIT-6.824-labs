@@ -39,41 +39,70 @@ func (mt *MapTask) startExpireCount(taskDoneInformer context.Context) {
 	}()
 }
 
-type Master struct {
-	nReduce             int
-	mapTaskNum          int
-	mapTaskWaitingQueue chan *MapTask
-	mapTaskDoneQueue    chan *MapTask
+type ReduceTask struct {
+	id                     int
+	filenames              []string
+	reduceTaskWaitingQueue chan *ReduceTask
+	reduceTaskDoneQueue    chan *ReduceTask
+}
 
-	mutex                   sync.Mutex
-	mapTaskProcessingBucket map[int]context.CancelFunc
+func (rt *ReduceTask) startExpireCount(taskDoneInformer context.Context) {
+	go func() {
+		timer := time.NewTimer(_defaultExpire)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+			// timer expired, send task back to waiting queue
+			rt.reduceTaskWaitingQueue <- rt
+			return
+		case <-taskDoneInformer.Done():
+			rt.reduceTaskDoneQueue <- rt
+			return
+		}
+	}()
+}
+
+type Master struct {
+	nReduce                int
+	nMap                   int
+	mapTaskWaitingQueue    chan *MapTask
+	mapTaskDoneQueue       chan *MapTask
+	reduceTaskWaitingQueue chan *ReduceTask
+	reduceTaskDoneQueue    chan *ReduceTask
+
+	mutex                      sync.RWMutex
+	mapTaskProcessingBucket    map[int]context.CancelFunc
+	reduceTaskProcessingBucket map[int]context.CancelFunc
+	reduceTasks                [][]string
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (m *Master) AskMapTask(req *AskMapTaskRequest, reply *AskMapTaskReply) error {
-	if len(m.mapTaskDoneQueue) == m.mapTaskNum {
+	if len(m.mapTaskDoneQueue) == m.nMap {
 		reply.Action = PhaseDone
-		log.Println("PhaseDone")
+		log.Println("[Map] PhaseDone")
 		return nil
 	}
 
-	mTask, ok := <-m.mapTaskWaitingQueue
-	if !ok {
+	select {
+	case mt := <-m.mapTaskWaitingQueue:
+		reply.MapTaskInfo.ID = mt.id
+		reply.MapTaskInfo.Filename = mt.filename
+		reply.MapTaskInfo.NReduce = m.nReduce
+		reply.Action = DoTask
+		ctx, cancel := context.WithCancel(context.Background())
+
+		m.mutex.Lock()
+		m.mapTaskProcessingBucket[mt.id] = cancel
+		mt.startExpireCount(ctx)
+		m.mutex.Unlock()
+		return nil
+	default:
 		reply.Action = WaitForCurrentPhaseDone
-		log.Println("WaitForCurrentPhaseDone")
+		log.Println("[Map] WaitForCurrentPhaseDone")
 		return nil
 	}
-	reply.Action = DoTask
-	reply.MapTaskInfo.ID = mTask.id
-	reply.MapTaskInfo.Filename = mTask.filename
-	reply.MapTaskInfo.NReduce = m.nReduce
-	ctx, cancel := context.WithCancel(context.Background())
-
-	m.mutex.Lock()
-	m.mapTaskProcessingBucket[mTask.id] = cancel
-	mTask.startExpireCount(ctx)
-	m.mutex.Unlock()
-	return nil
 }
 
 func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, reply *CompleteMapTaskReply) error {
@@ -89,11 +118,72 @@ func (m *Master) CompleteMapTask(req *CompleteMapTaskRequest, reply *CompleteMap
 		return errors.New("task not found")
 	}
 	done() // call cancel, means job done
-	log.Println("[job done]", req.TaskID, len(m.mapTaskDoneQueue), req.Filenames)
+	log.Println("[Map][task done]", req.TaskID, req.Filenames)
 
 	delete(m.mapTaskProcessingBucket, req.TaskID)
-	// TODO: store reduce tasks information
+	for reduceID, file := range req.Filenames {
+		m.reduceTasks[reduceID] = append(m.reduceTasks[reduceID], file)
+	}
+
 	return nil
+}
+
+// NOTE: due to the m.mapTaskDoneQueue is queuing in another goroutine after we call done()
+// we need to use mutex to protect the mapTaskDoneQueue
+func (m *Master) startQueueingReduceTasks() {
+	go func() {
+		for {
+			m.mutex.RLock()
+			if len(m.mapTaskDoneQueue) != m.nMap {
+				m.mutex.RUnlock()
+				// wait for map tasks done
+				time.Sleep(time.Second)
+				continue
+			}
+
+			log.Println("start queuing reduce tasks")
+			for reduceID, tasks := range m.reduceTasks {
+				m.reduceTaskWaitingQueue <- &ReduceTask{
+					id:                     reduceID,
+					filenames:              tasks,
+					reduceTaskWaitingQueue: m.reduceTaskWaitingQueue,
+					reduceTaskDoneQueue:    m.reduceTaskDoneQueue,
+				}
+			}
+			m.mutex.RUnlock()
+			log.Println("finish queuing reduce tasks")
+			break // exit the loop
+		}
+	}()
+}
+
+func (m *Master) AskReduceTask(req *AskReduceTaskRequest, reply *AskReduceTaskReply) error {
+	log.Println("[Reduce] call AskReduceTask")
+
+	if len(m.mapTaskDoneQueue) == m.nReduce {
+		reply.Action = PhaseDone
+		log.Println("[Reduce] PhaseDone")
+		return nil
+	}
+
+	select {
+	case rt := <-m.reduceTaskWaitingQueue:
+		reply.ReduceTaskInfo.ID = rt.id
+		reply.ReduceTaskInfo.Filenames = rt.filenames
+		reply.Action = DoTask
+		ctx, cancel := context.WithCancel(context.Background())
+
+		m.mutex.Lock()
+		m.mapTaskProcessingBucket[rt.id] = cancel
+		rt.startExpireCount(ctx)
+		m.mutex.Unlock()
+		return nil
+
+	default:
+		reply.Action = WaitForCurrentPhaseDone
+		log.Println("[Reduce] WaitForCurrentPhaseDone")
+		return nil
+	}
 }
 
 //
@@ -132,14 +222,20 @@ func (m *Master) Done() bool {
 func MakeMaster(files []string, nReduce int) *Master {
 	fmt.Println("Start master")
 	fmt.Println(files)
+	nReduce = 3
 
 	taskNum := len(files)
 	m := Master{
 		nReduce:                 nReduce,
-		mapTaskNum:              taskNum,
+		nMap:                    taskNum,
 		mapTaskWaitingQueue:     make(chan *MapTask, taskNum),
 		mapTaskDoneQueue:        make(chan *MapTask, taskNum),
 		mapTaskProcessingBucket: make(map[int]context.CancelFunc),
+
+		reduceTaskWaitingQueue:     make(chan *ReduceTask, nReduce),
+		reduceTaskDoneQueue:        make(chan *ReduceTask, nReduce),
+		reduceTaskProcessingBucket: make(map[int]context.CancelFunc),
+		reduceTasks:                make([][]string, nReduce),
 	}
 
 	for idx, filename := range files {
@@ -151,6 +247,11 @@ func MakeMaster(files []string, nReduce int) *Master {
 		}
 	}
 
+	for i := 0; i < nReduce; i++ {
+		m.reduceTasks[i] = make([]string, 0, taskNum)
+	}
+
+	m.startQueueingReduceTasks()
 	// create initial map tasks
 	// wait:
 	// 	1. worker to ask map task

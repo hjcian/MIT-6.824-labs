@@ -51,19 +51,25 @@ type CompleteMapTaskReply struct{}
 //
 // reduce
 //
+
+type ReduceTaskInfo struct {
+	ID        int
+	Filenames []string // for reading file
+}
+
 type AskReduceTaskRequest struct {
 	WorkerID int // just using PID
 }
 
 type AskReduceTaskReply struct {
-	TaskID    int
-	Filenames []string // the intermediate file names for reading
+	ReduceTaskInfo ReduceTaskInfo
+	Action         Action
 }
 
 type CompleteReduceTaskRequest struct {
 	WorkerID int // just using PID
 	TaskID   string
-	Filename string // result file
+	Filename string // result file (only one file)
 }
 
 type CompleteReduceTaskReply struct{}
