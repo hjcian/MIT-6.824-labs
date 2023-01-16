@@ -1,2 +1,11 @@
-wc.so
+*.so
+
+# build
+mrmaster
+mrsequential
+mrworker
 mr-out*
+mr-tmp/
+
+# materials
+6.824/
